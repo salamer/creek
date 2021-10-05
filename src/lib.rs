@@ -9,17 +9,17 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub enum NodeResult<'a> {
-    Value(HashMap<&'a str, Arc<dyn Any>>),
+    Ok(HashMap<&'a str, Arc<dyn Any>>),
     Err(&'static str),
 }
 
 impl<'a> NodeResult<'a> {
     pub fn new() -> NodeResult<'a> {
-        NodeResult::Value(HashMap::new())
+        NodeResult::Ok(HashMap::new())
     }
     pub fn safe_get<T: Any + Debug + Clone>(&self, key: &str) -> Option<T> {
         match self {
-            NodeResult::Value(kv) => match kv.get(&key) {
+            NodeResult::Ok(kv) => match kv.get(&key) {
                 Some(val) => match val.downcast_ref::<T>() {
                     Some(as_t) => return Some(as_t.clone()),
                     None => None,
@@ -31,23 +31,23 @@ impl<'a> NodeResult<'a> {
     }
     pub fn safe_set<T: Any + Debug + Clone>(&self, key: &'a str, val: &T) -> NodeResult<'_> {
         match self {
-            NodeResult::Value(kv) => {
+            NodeResult::Ok(kv) => {
                 let mut new_kv = kv.clone();
                 new_kv.insert(key, Arc::new(val.clone()));
-                return NodeResult::Value(new_kv);
+                return NodeResult::Ok(new_kv);
             }
             NodeResult::Err(e) => NodeResult::Err(e),
         }
     }
     fn merge<T: Any + Debug + Clone>(&self, other: &'a NodeResult) -> NodeResult<'_> {
         match self {
-            NodeResult::Value(kv) => {
+            NodeResult::Ok(kv) => {
                 let mut new_kv = kv.clone();
                 match other {
-                    NodeResult::Value(other_kv) => new_kv.extend(other_kv.clone()),
+                    NodeResult::Ok(other_kv) => new_kv.extend(other_kv.clone()),
                     NodeResult::Err(e) => {}
                 }
-                return NodeResult::Value(new_kv);
+                return NodeResult::Ok(new_kv);
             }
             NodeResult::Err(e) => NodeResult::Err(e),
         }
@@ -61,4 +61,14 @@ pub trait AsyncNode {
         input: &'a NodeResult,
         params: &Self::Params,
     ) -> NodeResult<'a>;
+}
+
+async fn demo<'a, T: DeserializeOwned>(
+    input: &NodeResult<'_>,
+) -> NodeResult<'a> {
+    return NodeResult::new();
+}
+
+fn main() {
+
 }

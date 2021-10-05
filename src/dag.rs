@@ -30,15 +30,15 @@ struct DAGNode {
 }
 
 struct DAGConfig {
-    starts: Vec<String>,
     nodes: HashMap<String, DAGNode>,
 }
+
+struct DAGScheduler {}
 
 fn init(filename: &str) -> Result<(), &'static str>{
     let contents = fs::read_to_string(filename).unwrap();
     let v: DAG = serde_json::from_str(&contents).unwrap();
     let mut dag_config = DAGConfig {
-        starts: Vec::new(),
         nodes: HashMap::new(),
     };
 
@@ -76,6 +76,10 @@ fn init(filename: &str) -> Result<(), &'static str>{
     }
 
     return Ok(())
+}
+
+impl DAGScheduler {
+    fn run()
 }
 
 fn have_cycle() {}
