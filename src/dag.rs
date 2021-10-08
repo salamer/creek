@@ -13,18 +13,21 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 #[derive(Clone)]
-pub enum NodeResult<'a> {
-    Ok(HashMap<&'a str, Arc<dyn Any>>),
+pub enum NodeResult {
+    Ok(HashMap<String, Arc<dyn Any + std::marker::Send>>),
     Err(&'static str),
 }
 
-impl<'a> NodeResult<'a> {
-    pub fn new() -> NodeResult<'a> {
+unsafe impl Send for NodeResult {}
+unsafe impl Sync for NodeResult {}
+
+impl NodeResult {
+    pub fn new() -> NodeResult {
         NodeResult::Ok(HashMap::new())
     }
     pub fn safe_get<T: Any + Debug + Clone>(&self, key: &str) -> Option<T> {
         match self {
-            NodeResult::Ok(kv) => match kv.get(&key) {
+            NodeResult::Ok(kv) => match kv.get(&key.to_string()) {
                 Some(val) => match val.downcast_ref::<T>() {
                     Some(as_t) => return Some(as_t.clone()),
                     None => None,
@@ -34,17 +37,21 @@ impl<'a> NodeResult<'a> {
             NodeResult::Err(_) => None,
         }
     }
-    pub fn safe_set<T: Any + Debug + Clone>(&self, key: &'a str, val: &T) -> NodeResult<'_> {
+    pub fn safe_set<T: Any + Debug + Clone + std::marker::Send>(
+        &self,
+        key: &str,
+        val: &T,
+    ) -> NodeResult {
         match self {
             NodeResult::Ok(kv) => {
                 let mut new_kv = kv.clone();
-                new_kv.insert(key, Arc::new(val.clone()));
+                new_kv.insert(key.to_string(), Arc::new(val.clone()));
                 return NodeResult::Ok(new_kv);
             }
             NodeResult::Err(e) => NodeResult::Err(e),
         }
     }
-    fn merge<T: Any + Debug + Clone>(&self, other: &'a NodeResult) -> NodeResult<'_> {
+    fn merge<T: Any + Debug + Clone>(&self, other: &NodeResult) -> NodeResult {
         match self {
             NodeResult::Ok(kv) => {
                 let mut new_kv = kv.clone();
@@ -61,23 +68,49 @@ impl<'a> NodeResult<'a> {
 
 #[async_trait]
 pub trait AsyncNode {
-    type Params: DeserializeOwned;
-    async fn handle<'a, T: DeserializeOwned>(
-        input: &'a NodeResult,
-        params: &Self::Params,
-    ) -> NodeResult<'a>;
+    async fn handle<T: DeserializeOwned + Sync, E: Send + Sync>(
+        graph_args: &E,
+        input: &NodeResult,
+        params: &T,
+    ) -> NodeResult;
 }
 
-async fn demo<'a, T: DeserializeOwned>(input: &NodeResult<'_>) -> NodeResult<'a> {
+#[derive(Deserialize, Default)]
+struct AnyParams {}
+
+struct AnyArgs {}
+
+#[derive(Default)]
+struct ANode {}
+
+#[async_trait]
+impl AsyncNode for ANode {
+    async fn handle<T: DeserializeOwned + Sync, E: Send + Sync>(
+        graph_args: &E,
+        input: &NodeResult,
+        params: &T,
+    ) -> NodeResult {
+        return NodeResult::new();
+    }
+}
+
+async fn route(node_name: &str) -> impl Sized + AsyncNode {
+    match node_name {
+        "ANode" => ANode::default(),
+        Default => ANode::default(),
+    }
+}
+
+async fn demo<'a, T, E>(graph_args: T, input: &NodeResult, params: &E) -> NodeResult {
     return NodeResult::new();
 }
 
-async fn handle<'a, T: DeserializeOwned>(input: &NodeResult<'a>, params: &T) -> NodeResult<'a> {
+async fn handle<'a, T: DeserializeOwned>(input: &NodeResult, params: &T) -> NodeResult {
     return NodeResult::new();
 }
 
 #[derive(Deserialize, Default)]
-struct Node {
+struct NodeConfig {
     name: String,
     node: String,
     deps: Vec<String>,
@@ -85,34 +118,34 @@ struct Node {
     necessary: bool,
 }
 
-struct DAGNodeWrap<'b, D, F>
+struct DAGNodeWrap<D, F>
 where
     D: DeserializeOwned,
-    F: futures::Future<Output = NodeResult<'b>>,
+    F: futures::Future<Output = NodeResult>,
 {
-    node: Node,
-    f: Shared<F>,
+    node_conf: NodeConfig,
+    future_handle: Shared<F>,
     params: D,
 }
 
-async fn demo1<'a>(params: &NodeResult<'a>, n: &'a Node) {
+async fn demo1<'a>(params: &NodeResult, n: &'a NodeConfig) {
     let c = handle(params, n);
     let aa = DAGNodeWrap {
-        node: Node::default(),
-        f: c.shared(),
-        params: Node::default(),
+        node_conf: NodeConfig::default(),
+        future_handle: c.shared(),
+        params: NodeConfig::default(),
     };
 
-    aa.f.await;
+    aa.future_handle.await;
 }
 
 #[derive(Deserialize)]
 struct DAG {
-    nodes: HashMap<String, Node>,
+    nodes: HashMap<String, NodeConfig>,
 }
 
 struct DAGNode {
-    node: Node,
+    node: NodeConfig,
     nexts: HashSet<String>,
     prevs: HashSet<String>,
 }
