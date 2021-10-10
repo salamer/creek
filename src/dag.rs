@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::future;
 use futures::future::Shared;
 use futures::prelude::Future;
 use futures::FutureExt;
@@ -51,7 +52,7 @@ impl NodeResult {
             NodeResult::Err(e) => NodeResult::Err(e),
         }
     }
-    fn merge<T: Any + Debug + Clone>(&self, other: &NodeResult) -> NodeResult {
+    fn merge(&self, other: &NodeResult) -> NodeResult {
         match self {
             NodeResult::Ok(kv) => {
                 let mut new_kv = kv.clone();
@@ -68,14 +69,15 @@ impl NodeResult {
 
 #[async_trait]
 pub trait AsyncNode {
-    async fn handle<T: DeserializeOwned + Sync, E: Send + Sync>(
-        graph_args: &E,
-        input: &NodeResult,
-        params: &T,
-    ) -> NodeResult;
+    type Params;
+    async fn handle<E: Send + Sync>(
+        graph_args: Arc<E>,
+        input: Arc<NodeResult>,
+        params: Arc<Self::Params>,
+    ) -> Arc<NodeResult>;
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Copy, Clone)]
 struct AnyParams {}
 
 struct AnyArgs {}
@@ -83,14 +85,21 @@ struct AnyArgs {}
 #[derive(Default)]
 struct ANode {}
 
+impl ANode {
+    fn to_params(input: &str) -> AnyParams {
+        AnyParams::default()
+    }
+}
+
 #[async_trait]
 impl AsyncNode for ANode {
-    async fn handle<T: DeserializeOwned + Sync, E: Send + Sync>(
-        graph_args: &E,
-        input: &NodeResult,
-        params: &T,
-    ) -> NodeResult {
-        return NodeResult::new();
+    type Params = AnyParams;
+    async fn handle<E: Send + Sync>(
+        graph_args: Arc<E>,
+        input: Arc<NodeResult>,
+        params: Arc<AnyParams>,
+    ) -> Arc<NodeResult> {
+        return Arc::new(NodeResult::new());
     }
 }
 
@@ -105,8 +114,8 @@ async fn demo<'a, T, E>(graph_args: T, input: &NodeResult, params: &E) -> NodeRe
     return NodeResult::new();
 }
 
-async fn handle<'a, T: DeserializeOwned>(input: &NodeResult, params: &T) -> NodeResult {
-    return NodeResult::new();
+async fn handle() -> Arc<NodeResult> {
+    Arc::new(NodeResult::new())
 }
 
 #[derive(Deserialize, Default)]
@@ -118,25 +127,22 @@ struct NodeConfig {
     necessary: bool,
 }
 
-struct DAGNodeWrap<D, F>
+struct DAGNode<F>
 where
-    D: DeserializeOwned,
-    F: futures::Future<Output = NodeResult>,
+    F: futures::Future<Output = Arc<NodeResult>>,
 {
     node_conf: NodeConfig,
     future_handle: Shared<F>,
-    params: D,
+    // params: Option<D>,
+    nexts: HashSet<String>,
+    prevs: HashSet<String>,
 }
 
-async fn demo1<'a>(params: &NodeResult, n: &'a NodeConfig) {
-    let c = handle(params, n);
-    let aa = DAGNodeWrap {
-        node_conf: NodeConfig::default(),
-        future_handle: c.shared(),
-        params: NodeConfig::default(),
-    };
-
-    aa.future_handle.await;
+struct DAGNodeConfig {
+    node_conf: NodeConfig,
+    // params: Option<D>,
+    nexts: HashSet<String>,
+    prevs: HashSet<String>,
 }
 
 #[derive(Deserialize)]
@@ -144,14 +150,8 @@ struct DAG {
     nodes: HashMap<String, NodeConfig>,
 }
 
-struct DAGNode {
-    node: NodeConfig,
-    nexts: HashSet<String>,
-    prevs: HashSet<String>,
-}
-
 struct DAGConfig {
-    nodes: HashMap<String, DAGNode>,
+    nodes: HashMap<String, DAGNodeConfig>,
 }
 
 struct DAGScheduler {}
@@ -166,10 +166,11 @@ fn init(filename: &str) -> Result<(), &'static str> {
     for (key, node) in v.nodes.into_iter() {
         dag_config.nodes.insert(
             node.name.clone(),
-            DAGNode {
-                node: node,
+            DAGNodeConfig {
+                node_conf: NodeConfig::default(),
                 nexts: HashSet::new(),
                 prevs: HashSet::new(),
+                // params: None,
             },
         );
     }
@@ -179,21 +180,87 @@ fn init(filename: &str) -> Result<(), &'static str> {
 
     // insert
     for (node_name, node) in &dag_config.nodes {
-        for dep in node.node.deps.iter() {
-            if dep == &node.node.name {
+        for dep in node.node_conf.deps.iter() {
+            if dep == &node.node_conf.name {
                 return Err("failed");
             }
             if dag_config.nodes.contains_key(&dep.clone()) {
-                let mut p = prev_tmp
-                    .entry(node.node.name.clone())
-                    .or_insert(HashSet::new());
-                p.insert(dep.clone());
-                let mut n = next_tmp.entry(dep.to_string()).or_insert(HashSet::new());
-                n.insert(node.node.name.clone());
+                prev_tmp
+                    .entry(node.node_conf.name.clone())
+                    .or_insert(HashSet::new())
+                    .insert(dep.clone());
+                next_tmp
+                    .entry(dep.to_string())
+                    .or_insert(HashSet::new())
+                    .insert(node.node_conf.name.clone());
             } else {
                 return Err("failed");
             }
         }
+    }
+
+    // TODO: has cycle?
+    // TODO: has only one leaf node
+
+    let mut entry_nodes = HashSet::new();
+    let mut leaf_nodes = HashSet::new();
+
+    for (node_name, node) in &dag_config.nodes {
+        if node.prevs.len() == 0 {
+            entry_nodes.insert(node_name.clone());
+        }
+
+        if node.nexts.len() == 0 {
+            leaf_nodes.insert(node_name.clone());
+        }
+    }
+
+    let mut DAGManager = HashMap::new();
+    let mut DAGNames = Vec::new();
+    let mut prev_map = HashMap::new();
+
+    for (node_name, node) in dag_config.nodes {
+        DAGManager.insert(
+            node_name.clone(),
+            Box::new(DAGNode {
+                node_conf: node.node_conf,
+                nexts: node.nexts.clone(),
+                prevs: node.prevs.clone(),
+                // params: None,
+                future_handle: handle().shared(),
+            }),
+        );
+        DAGNames.push(node_name.clone());
+        prev_map.insert(node_name.clone(), node.prevs.clone());
+    }
+
+    let args: Arc<i32> = Arc::new(1);
+    let params = Arc::new(AnyParams::default());
+
+    for node_name in DAGNames.iter() {
+        let mut deps = Vec::new();
+
+        for dep in prev_map.get(&node_name.clone()).unwrap().iter() {
+            deps.push(DAGManager.get(dep).unwrap().future_handle.clone());
+        }
+
+        let mut node = DAGManager.get_mut(node_name).unwrap();
+        //  handle().shared();
+
+        let p = async {
+            let n = future::join_all(deps)
+                .then(|x| async move {
+                    // ANode::handle::<i32>(
+                    //     args,
+                    //     Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
+                    //     params,
+                    // )
+                    handle()
+                })
+                .await;
+            n 
+        };
+        node.future_handle = p.shared();
     }
 
     return Ok(());
@@ -203,4 +270,4 @@ fn init(filename: &str) -> Result<(), &'static str> {
 //     fn run()
 // }
 
-fn have_cycle() {}
+fn have_cycle(x: i32) {}
