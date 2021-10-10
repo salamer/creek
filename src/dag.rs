@@ -1,8 +1,7 @@
 use async_trait::async_trait;
-use futures::future;
+use futures::future::FutureExt;
 use futures::future::Shared;
 use futures::prelude::Future;
-use futures::FutureExt;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -12,6 +11,7 @@ use std::fmt::Debug;
 use std::fs;
 use std::rc::Rc;
 use std::sync::Arc;
+use futures::future::join_all;
 
 #[derive(Clone)]
 pub enum NodeResult {
@@ -74,7 +74,7 @@ pub trait AsyncNode {
         graph_args: Arc<E>,
         input: Arc<NodeResult>,
         params: Arc<Self::Params>,
-    ) -> Arc<NodeResult>;
+    ) -> NodeResult;
 }
 
 #[derive(Deserialize, Default, Copy, Clone)]
@@ -98,8 +98,8 @@ impl AsyncNode for ANode {
         graph_args: Arc<E>,
         input: Arc<NodeResult>,
         params: Arc<AnyParams>,
-    ) -> Arc<NodeResult> {
-        return Arc::new(NodeResult::new());
+    ) -> NodeResult {
+        return NodeResult::new();
     }
 }
 
@@ -110,12 +110,12 @@ async fn route(node_name: &str) -> impl Sized + AsyncNode {
     }
 }
 
-async fn demo<'a, T, E>(graph_args: T, input: &NodeResult, params: &E) -> NodeResult {
-    return NodeResult::new();
-}
+// async fn demo<'a, T, E>(graph_args: Arc<T>, input: Arc<NodeResult>, params: Arc<E>, dag_manager: Option<HashMap<String, Box<DAGNode>>>) -> NodeResult {
+//     return NodeResult::new();
+// }
 
-async fn handle() -> Arc<NodeResult> {
-    Arc::new(NodeResult::new())
+async fn handle() -> NodeResult {
+    NodeResult::new()
 }
 
 #[derive(Deserialize, Default)]
@@ -129,10 +129,10 @@ struct NodeConfig {
 
 struct DAGNode<F>
 where
-    F: futures::Future<Output = Arc<NodeResult>>,
+    F: futures::Future<Output = NodeResult>,
 {
     node_conf: NodeConfig,
-    future_handle: Shared<F>,
+    future_handle: F,
     // params: Option<D>,
     nexts: HashSet<String>,
     prevs: HashSet<String>,
@@ -218,8 +218,11 @@ fn init(filename: &str) -> Result<(), &'static str> {
     let mut DAGManager = HashMap::new();
     let mut DAGNames = Vec::new();
     let mut prev_map = HashMap::new();
+    let args: Arc<i32> = Arc::new(1);
+    let params = Arc::new(AnyParams::default());
 
     for (node_name, node) in dag_config.nodes {
+        let entry = async { NodeResult::new() };
         DAGManager.insert(
             node_name.clone(),
             Box::new(DAGNode {
@@ -227,44 +230,46 @@ fn init(filename: &str) -> Result<(), &'static str> {
                 nexts: node.nexts.clone(),
                 prevs: node.prevs.clone(),
                 // params: None,
-                future_handle: handle().shared(),
+                // future_handle: demo::<i32, AnyParams>(Arc::new(*args.clone()), Arc::new(NodeResult::new()), Arc::new(*params.clone()))
+                //     .shared()
+                //     .clone(),
+                future_handle: entry,
             }),
         );
         DAGNames.push(node_name.clone());
         prev_map.insert(node_name.clone(), node.prevs.clone());
     }
 
-    let args: Arc<i32> = Arc::new(1);
-    let params = Arc::new(AnyParams::default());
-
     for node_name in DAGNames.iter() {
         let mut deps = Vec::new();
-
         for dep in prev_map.get(&node_name.clone()).unwrap().iter() {
-            deps.push(DAGManager.get(dep).unwrap().future_handle.clone());
+            deps.push(DAGManager.get(dep).unwrap().future_handle.shared().clone());
         }
-
         let mut node = DAGManager.get_mut(node_name).unwrap();
-        //  handle().shared();
 
         let p = async {
-            let n = future::join_all(deps)
+            join_all(deps)
                 .then(|x| async move {
-                    // ANode::handle::<i32>(
-                    //     args,
-                    //     Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
-                    //     params,
-                    // )
-                    handle()
+                    ANode::handle::<i32>(
+                        args,
+                        Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
+                        params,
+                    );
+                    // handle()
+                    NodeResult::new()
                 })
-                .await;
-            n 
+                .await
+            // handle().await
         };
-        node.future_handle = p.shared();
+        node.future_handle = p;
     }
 
     return Ok(());
 }
+
+// async fn wrapper(f: futures::Future<Output = NodeResult>) -> futures::Future<Output = NodeResult>{
+//     Box::pin(f.await)
+// }
 
 // impl DAGScheduler {
 //     fn run()
