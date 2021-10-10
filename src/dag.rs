@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::future::join_all;
 use futures::future::FutureExt;
 use futures::future::Shared;
 use futures::prelude::Future;
@@ -9,9 +10,9 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
-use futures::future::join_all;
 
 #[derive(Clone)]
 pub enum NodeResult {
@@ -132,7 +133,7 @@ where
     F: futures::Future<Output = NodeResult>,
 {
     node_conf: NodeConfig,
-    future_handle: F,
+    future_handle: Shared<F>,
     // params: Option<D>,
     nexts: HashSet<String>,
     prevs: HashSet<String>,
@@ -230,10 +231,7 @@ fn init(filename: &str) -> Result<(), &'static str> {
                 nexts: node.nexts.clone(),
                 prevs: node.prevs.clone(),
                 // params: None,
-                // future_handle: demo::<i32, AnyParams>(Arc::new(*args.clone()), Arc::new(NodeResult::new()), Arc::new(*params.clone()))
-                //     .shared()
-                //     .clone(),
-                future_handle: entry,
+                future_handle: entry.boxed().shared(),
             }),
         );
         DAGNames.push(node_name.clone());
@@ -243,7 +241,7 @@ fn init(filename: &str) -> Result<(), &'static str> {
     for node_name in DAGNames.iter() {
         let mut deps = Vec::new();
         for dep in prev_map.get(&node_name.clone()).unwrap().iter() {
-            deps.push(DAGManager.get(dep).unwrap().future_handle.shared().clone());
+            deps.push(DAGManager.get(dep).unwrap().future_handle.clone());
         }
         let mut node = DAGManager.get_mut(node_name).unwrap();
 
@@ -251,17 +249,16 @@ fn init(filename: &str) -> Result<(), &'static str> {
             join_all(deps)
                 .then(|x| async move {
                     ANode::handle::<i32>(
-                        args,
+                        Arc::new(1),
                         Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
-                        params,
-                    );
-                    // handle()
-                    NodeResult::new()
+                        Arc::new(AnyParams::default()),
+                    )
+                    .await
                 })
                 .await
-            // handle().await
-        };
-        node.future_handle = p;
+        }
+        .boxed();
+        node.future_handle = p.shared();
     }
 
     return Ok(());

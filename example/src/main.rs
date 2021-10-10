@@ -15,9 +15,13 @@ async fn demo() {
         future::join_all(vec![future1.clone(), future2.clone()]).await;
     };
 
-    let b = async {
+    let mut b = async {
         future::join_all(vec![future2.clone(), future3.clone()]).await;
-    };
+    }.boxed();
+
+    b = async {
+        future::join_all(vec![future2.clone(), future3.clone()]).await;
+    }.boxed();
 
     a.await;
     b.await;
