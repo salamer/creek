@@ -2,16 +2,16 @@ use async_trait::async_trait;
 use futures::future::join_all;
 use futures::future::FutureExt;
 use futures::future::Shared;
-use futures::prelude::Future;
-use serde::de::DeserializeOwned;
+
+
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
-use std::pin::Pin;
-use std::rc::Rc;
+
+
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -30,10 +30,7 @@ impl NodeResult {
     pub fn safe_get<T: Any + Debug + Clone>(&self, key: &str) -> Option<T> {
         match self {
             NodeResult::Ok(kv) => match kv.get(&key.to_string()) {
-                Some(val) => match val.downcast_ref::<T>() {
-                    Some(as_t) => return Some(as_t.clone()),
-                    None => None,
-                },
+                Some(val) => val.downcast_ref::<T>().map(|as_t| as_t.clone()),
                 None => None,
             },
             NodeResult::Err(_) => None,
@@ -48,7 +45,7 @@ impl NodeResult {
             NodeResult::Ok(kv) => {
                 let mut new_kv = kv.clone();
                 new_kv.insert(key.to_string(), Arc::new(val.clone()));
-                return NodeResult::Ok(new_kv);
+                NodeResult::Ok(new_kv)
             }
             NodeResult::Err(e) => NodeResult::Err(e),
         }
@@ -59,9 +56,9 @@ impl NodeResult {
                 let mut new_kv = kv.clone();
                 match other {
                     NodeResult::Ok(other_kv) => new_kv.extend(other_kv.clone()),
-                    NodeResult::Err(e) => {}
+                    NodeResult::Err(_e) => {}
                 }
-                return NodeResult::Ok(new_kv);
+                NodeResult::Ok(new_kv)
             }
             NodeResult::Err(e) => NodeResult::Err(e),
         }
@@ -87,7 +84,7 @@ struct AnyArgs {}
 struct ANode {}
 
 impl ANode {
-    fn to_params(input: &str) -> AnyParams {
+    fn to_params(_input: &str) -> AnyParams {
         AnyParams::default()
     }
 }
@@ -96,9 +93,9 @@ impl ANode {
 impl AsyncNode for ANode {
     type Params = AnyParams;
     async fn handle<E: Send + Sync>(
-        graph_args: Arc<E>,
-        input: Arc<NodeResult>,
-        params: Arc<AnyParams>,
+        _graph_args: Arc<E>,
+        _input: Arc<NodeResult>,
+        _params: Arc<AnyParams>,
     ) -> NodeResult {
         return NodeResult::new();
     }
@@ -107,13 +104,9 @@ impl AsyncNode for ANode {
 async fn route(node_name: &str) -> impl Sized + AsyncNode {
     match node_name {
         "ANode" => ANode::default(),
-        Default => ANode::default(),
+        _Default => ANode::default(),
     }
 }
-
-// async fn demo<'a, T, E>(graph_args: Arc<T>, input: Arc<NodeResult>, params: Arc<E>, dag_manager: Option<HashMap<String, Box<DAGNode>>>) -> NodeResult {
-//     return NodeResult::new();
-// }
 
 async fn handle() -> NodeResult {
     NodeResult::new()
@@ -164,7 +157,7 @@ fn init(filename: &str) -> Result<(), &'static str> {
         nodes: HashMap::new(),
     };
 
-    for (key, node) in v.nodes.into_iter() {
+    for (_key, node) in v.nodes.into_iter() {
         dag_config.nodes.insert(
             node.name.clone(),
             DAGNodeConfig {
@@ -180,7 +173,7 @@ fn init(filename: &str) -> Result<(), &'static str> {
     let mut next_tmp: HashMap<String, HashSet<String>> = HashMap::new();
 
     // insert
-    for (node_name, node) in &dag_config.nodes {
+    for node in dag_config.nodes.values() {
         for dep in node.node_conf.deps.iter() {
             if dep == &node.node_conf.name {
                 return Err("failed");
@@ -207,11 +200,11 @@ fn init(filename: &str) -> Result<(), &'static str> {
     let mut leaf_nodes = HashSet::new();
 
     for (node_name, node) in &dag_config.nodes {
-        if node.prevs.len() == 0 {
+        if node.prevs.is_empty() {
             entry_nodes.insert(node_name.clone());
         }
 
-        if node.nexts.len() == 0 {
+        if node.nexts.is_empty() {
             leaf_nodes.insert(node_name.clone());
         }
     }
@@ -219,8 +212,8 @@ fn init(filename: &str) -> Result<(), &'static str> {
     let mut DAGManager = HashMap::new();
     let mut DAGNames = Vec::new();
     let mut prev_map = HashMap::new();
-    let args: Arc<i32> = Arc::new(1);
-    let params = Arc::new(AnyParams::default());
+    let _args: Arc<i32> = Arc::new(1);
+    let _params = Arc::new(AnyParams::default());
 
     for (node_name, node) in dag_config.nodes {
         let entry = async { NodeResult::new() };
@@ -261,15 +254,7 @@ fn init(filename: &str) -> Result<(), &'static str> {
         node.future_handle = p.shared();
     }
 
-    return Ok(());
+    Ok(())
 }
 
-// async fn wrapper(f: futures::Future<Output = NodeResult>) -> futures::Future<Output = NodeResult>{
-//     Box::pin(f.await)
-// }
-
-// impl DAGScheduler {
-//     fn run()
-// }
-
-fn have_cycle(x: i32) {}
+fn have_cycle(_x: i32) {}
