@@ -3,14 +3,12 @@ use futures::future::join_all;
 use futures::future::FutureExt;
 use futures::future::Shared;
 
-
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
-
 
 use std::sync::Arc;
 
@@ -254,7 +252,21 @@ fn init(filename: &str) -> Result<(), &'static str> {
         node.future_handle = p.shared();
     }
 
+    let r = async {
+        let leaf_nodes: Vec<_> = leaf_nodes
+            .iter()
+            .map(|x| DAGManager.get(x).unwrap().future_handle.clone())
+            .collect();
+        let x = join_all(leaf_nodes).await;
+        x[0].clone()
+    };
+
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(r);
+
     Ok(())
 }
+
+fn flow() {}
 
 fn have_cycle(_x: i32) {}
