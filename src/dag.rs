@@ -28,7 +28,7 @@ impl NodeResult {
     pub fn safe_get<T: Any + Debug + Clone>(&self, key: &str) -> Option<T> {
         match self {
             NodeResult::Ok(kv) => match kv.get(&key.to_string()) {
-                Some(val) => val.downcast_ref::<T>().map(|as_t| as_t.clone()),
+                Some(val) => val.downcast_ref::<T>().cloned(),
                 None => None,
             },
             NodeResult::Err(_) => None,
@@ -261,7 +261,7 @@ fn init(filename: &str) -> Result<(), &'static str> {
         x[0].clone()
     };
 
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(r);
 
     Ok(())
