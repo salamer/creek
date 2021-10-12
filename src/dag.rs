@@ -13,7 +13,7 @@ use std::fs;
 use std::pin::Pin;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum NodeResult {
     Ok(HashMap<String, Arc<dyn Any + std::marker::Send>>),
     Err(&'static str),
@@ -62,6 +62,24 @@ impl NodeResult {
             NodeResult::Err(e) => NodeResult::Err(e),
         }
     }
+
+    fn safe_get_vec<T: Any + Debug + Clone + std::marker::Send>(
+        &self,
+    ) -> Option<HashMap<String, T>> {
+        match self {
+            NodeResult::Ok(kv) => {
+                let mut ret = HashMap::new();
+                for (k, v) in kv {
+                    match v.downcast_ref::<T>().cloned() {
+                        Some(val) => ret.insert(k.clone(), val.clone()),
+                        None => None,
+                    };
+                }
+                Some(ret)
+            }
+            NodeResult::Err(_) => None,
+        }
+    }
 }
 
 #[async_trait]
@@ -74,7 +92,7 @@ pub trait AsyncNode {
     ) -> NodeResult;
 }
 
-#[derive(Deserialize, Default, Copy, Clone)]
+#[derive(Deserialize, Default, Copy, Clone, Debug)]
 struct AnyParams {
     val: i32,
 }
@@ -95,10 +113,11 @@ impl AsyncNode for ANode {
     type Params = AnyParams;
     async fn handle<E: Send + Sync>(
         _graph_args: Arc<E>,
-        _input: Arc<NodeResult>,
-        _params: Arc<AnyParams>,
+        input: Arc<NodeResult>,
+        params: Arc<AnyParams>,
     ) -> NodeResult {
-        return NodeResult::new();
+        println!("val {:?} {:?}", params, input);
+        return NodeResult::new().safe_set(&params.val.to_string(), &params.val.to_string());
     }
 }
 
@@ -225,32 +244,45 @@ impl DAGScheduler {
         let mut dag_center = HashMap::new();
         let mut DAGNames = Vec::new();
         let mut prev_map = HashMap::new();
-        let mut params_map = HashMap::new();
         let args: Arc<i32> = Arc::new(1);
         let _params = Arc::new(AnyParams::default());
 
         for (node_name, node) in dag_config.nodes {
+            println!("pppp {:?}", node.prevs);
             let entry = async { NodeResult::new() };
+            let prev = match prev_tmp.get(&node_name) {
+                Some(val) => val.clone(),
+                None => HashSet::new(),
+            };
             dag_center.insert(
                 node_name.clone(),
                 Box::new(DAGNode {
                     node_conf: node.node_conf,
                     nexts: node.nexts.clone(),
-                    prevs: node.prevs.clone(),
+                    prevs: prev.clone(),
                     params: node.params.clone(),
                     future_handle: entry.boxed().shared(),
                 }),
             );
             DAGNames.push(node_name.clone());
-            prev_map.insert(node_name.clone(), node.prevs.clone());
-            params_map.insert(node_name.clone(), node.params.clone());
+            prev_map.insert(node_name.clone(), prev.clone());
+            self.params_map
+                .insert(node_name.clone(), node.params.clone());
         }
+        println!("xxxx {:?}", prev_map);
+
+        println!("self.params_map {:?}", self.params_map);
 
         for node_name in DAGNames.iter() {
             let mut deps = Vec::new();
             for dep in prev_map.get(&node_name.clone()).unwrap().iter() {
                 deps.push(dag_center.get(dep).unwrap().future_handle.clone());
             }
+            println!(
+                "{:?} deps {:?}",
+                node_name,
+                prev_map.get(&node_name.clone()).unwrap()
+            );
 
             let nn = node_name.clone();
             let mut node = dag_center.get_mut(node_name).unwrap();
@@ -261,13 +293,16 @@ impl DAGScheduler {
             let my_params_map = self.params_map.get(node_name).unwrap().clone();
             node.future_handle = join_all(deps)
                 .then(|x| async move {
+                    println!("x {:?}", x);
                     let params: AnyParams = serde_json::from_str(my_params_map.get()).unwrap();
-                    ANode::handle::<i32>(
+                    let n = ANode::handle::<i32>(
                         a,
                         Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
-                        Arc::new(AnyParams::default()),
+                        Arc::new(params),
                     )
-                    .await
+                    .await;
+                    println!("pppp {:?}", n);
+                    n
                 })
                 .boxed()
                 .shared();
@@ -283,7 +318,8 @@ impl DAGScheduler {
         };
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(r);
+        let p = rt.block_on(r);
+        println!("val {:?}", p.safe_get_vec::<i32>().unwrap());
 
         Ok(())
     }
