@@ -1,6 +1,6 @@
 mod dag;
-use std::collections::HashMap;
+
 fn main() {
-    let n = dag::DAGScheduler {};
-    n.flow("/Users/chenyangyang/rust/creek/conf.json");
+    let n = dag::DAGScheduler::new();
+    // n.flow("/Users/chenyangyang/rust/creek/conf.json");
 }

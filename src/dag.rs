@@ -149,10 +149,18 @@ struct DAGConfig {
     nodes: HashMap<String, DAGNodeConfig>,
 }
 
-pub struct DAGScheduler {}
+pub struct DAGScheduler {
+    params_map: HashMap<String, Box<RawValue>>,
+}
 
 impl DAGScheduler {
-    pub async fn init(&self, filename: &str) -> Result<(), &'static str> {
+    pub fn new() -> DAGScheduler {
+        DAGScheduler {
+            params_map: HashMap::new(),
+        }
+    }
+
+    pub fn init(&mut self, filename: &str) -> Result<(), &'static str> {
         let contents = fs::read_to_string(filename).unwrap();
         println!("content {:?}", contents);
         let v: DAG = serde_json::from_str(&contents).unwrap();
@@ -214,16 +222,16 @@ impl DAGScheduler {
             }
         }
 
-        let mut DAGManager = HashMap::new();
+        let mut dag_center = HashMap::new();
         let mut DAGNames = Vec::new();
         let mut prev_map = HashMap::new();
         let mut params_map = HashMap::new();
-        let _args: Arc<i32> = Arc::new(1);
+        let args: Arc<i32> = Arc::new(1);
         let _params = Arc::new(AnyParams::default());
 
         for (node_name, node) in dag_config.nodes {
             let entry = async { NodeResult::new() };
-            DAGManager.insert(
+            dag_center.insert(
                 node_name.clone(),
                 Box::new(DAGNode {
                     node_conf: node.node_conf,
@@ -241,45 +249,46 @@ impl DAGScheduler {
         for node_name in DAGNames.iter() {
             let mut deps = Vec::new();
             for dep in prev_map.get(&node_name.clone()).unwrap().iter() {
-                deps.push(DAGManager.get(dep).unwrap().future_handle.clone());
+                deps.push(dag_center.get(dep).unwrap().future_handle.clone());
             }
-            {
-                let nn = node_name.clone();
-                let mut node = DAGManager.get_mut(node_name).unwrap();
-                // let raw = ;
-                // let any_params = Arc::new(my_params_map.get(&nn.clone()).unwrap().get().clone());
-                node.future_handle = join_all(deps)
-                    .then(|x| async move {
-                        // println!("{:?}", node.node_conf);
-                        // let params: AnyParams = serde_json::from_str(&any_params).unwrap();
-                        ANode::handle::<i32>(
-                            Arc::new(1),
-                            Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
-                            Arc::new(AnyParams::default()),
-                        )
-                        .await
-                    })
-                    .boxed()
-                    .shared();
-            }
+
+            let nn = node_name.clone();
+            let mut node = dag_center.get_mut(node_name).unwrap();
+            let raw = Arc::new("");
+            let any_params = Arc::new(node.params.get());
+            // let c = async { Arc::clone(&any_params) };
+            let a = Arc::clone(&args);
+            let my_params_map = self.params_map.get(node_name).unwrap().clone();
+            node.future_handle = join_all(deps)
+                .then(|x| async move {
+                    let params: AnyParams = serde_json::from_str(my_params_map.get()).unwrap();
+                    ANode::handle::<i32>(
+                        a,
+                        Arc::new(x.iter().fold(NodeResult::new(), |a, b| a.merge(b))),
+                        Arc::new(AnyParams::default()),
+                    )
+                    .await
+                })
+                .boxed()
+                .shared();
         }
 
         let r = async {
             let leaf_nodes: Vec<_> = leaf_nodes
                 .iter()
-                .map(|x| DAGManager.get(x).unwrap().future_handle.clone())
+                .map(|x| dag_center.get(x).unwrap().future_handle.clone())
                 .collect();
             let x = join_all(leaf_nodes).await;
             x[0].clone()
         };
 
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(r);
+
         Ok(())
     }
 
-    pub fn flow(&self, filename: &str) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(self.init(filename));
-    }
+    pub fn flow(&self, filename: &str) {}
 }
 
 fn have_cycle(_x: i32) {}
