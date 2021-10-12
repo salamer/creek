@@ -1,0 +1,40 @@
+{
+  "nodes": [
+    {
+      "name": "A",
+      "node": "Anode",
+      "deps": [],
+      "params": {
+        "val": 1
+      },
+      "necessary": false
+    },
+    {
+      "name": "B",
+      "node": "Anode",
+      "deps": [],
+      "params": {
+        "val": 2
+      },
+      "necessary": false
+    },
+    {
+      "name": "C",
+      "node": "Anode",
+      "deps": ["A", "B"],
+      "params": {
+        "val": 3
+      },
+      "necessary": false
+    },
+    {
+      "name": "D",
+      "node": "Anode",
+      "deps": ["A", "C"],
+      "params": {
+        "val": 4
+      },
+      "necessary": false
+    }
+  ]
+}
